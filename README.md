@@ -1,5 +1,5 @@
 # m3dheatedbed
-DYI M3D heated printer bed
+DIY M3D heated printer bed
 
 Use at your own risk. Licensed under GPLv3.
 
