@@ -129,6 +129,7 @@ namespace Bed_Heater_Controller
                     }
 
                     // Store com port selection on successful connect
+                    Settings.ComPort = selected;
                     Settings.Save(SettingsFile);
 
                     ReadThread = new Thread(new ThreadStart(RunReadThread));
@@ -195,7 +196,6 @@ namespace Bed_Heater_Controller
 
         public void OnMessage(String msg)
         {
-            System.Diagnostics.Debug.WriteLine(msg);
             char[] separators = { ' ' };
             string[] words = msg.Split(separators);
             if (words.Length != 3)
