@@ -1,6 +1,8 @@
 # m3dheatedbed
 DIY M3D heated printer bed
 
+The logic board, firmware and app are not M3D specific, so this could be used with any printer. However, I have only tested it with the M3D.
+
 Use at your own risk. Licensed under GPLv3.
 
 Contents:
