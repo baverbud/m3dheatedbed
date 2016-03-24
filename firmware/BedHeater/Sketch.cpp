@@ -16,27 +16,35 @@ void loop();
 // Set your supply voltage here. Best to
 // measure it (i.e. don't say 5.0 because you're
 // using 5.0V, actually check the avcc pin with a voltmeter).
-float supplyVoltage = 5.0f;
+// TODO: we should be able to determine this internally using the reference voltage
+// in the avr.
+float supplyVoltage = 3.3f;
 // resistor in the voltage divider. Again, best to actually
 // measure since resistor accuracy can be poor (eg.
 // if you pick a silver banded resistor, there's a 20% range
 // around the target resistance where the real resistance
 // can lie).
-float balanceResistor = 10000;
+float balanceResistor = 8960;
 
+// Pin specifiers use arduino nano indexing
 // Pin selection
-const int pinHeater = 9;
-const int pinThermistor = 10;
+const int pinHeater = 3;
+// ADC pin 0
+const int pinThermistor = 0;
 
 // PID input/set point/output
 double actualTemp = 0.0f;
-double targetTemp = 0.0f;
+double targetTemp = 293.15f;
 double pulseWidth = 0.0f; // range [0,1]
 
 // Tuning parameters
-const double kP = 0.1f;
-const double kI = 0.05f;
-const double kD = 0.0f;
+const double kPfar = 0.1f;
+const double kIfar = 0.01f;
+const double kDfar = 0.0f;
+
+const double kPnear = 0.1f;
+const double kInear = 0.01f;
+const double kDnear = 0.0f;
 
 // Therm step addr in eeprom (to store the calibration)
 // Therm step set addr is a byte set to 0 if calibration
@@ -49,17 +57,18 @@ float thermStep = 1.0f;
 float thermYInt = 0.0f;
 bool thermCalibrated = false;
 
-// Constants for Steinhart-Hart
-float tA = 1.4e-3f;
-float tB = 2.37e-4f;
-float tC = 9.9e-8f;
+// Constants for Steinhart-Hart. These need updated depending on your thermistor.
+float tA = 6.1406e-04;
+float tB = 2.2759e-04;
+float tC = 7.8425e-08;
 
-PID pid(&actualTemp, &pulseWidth, &targetTemp, kP, kI, kD, DIRECT);
+PID pid(&actualTemp, &pulseWidth, &targetTemp, kPnear, kInear, kDnear, DIRECT);
 
 void setup() {
   // put your setup code here, to run once:
   pinMode(pinHeater, OUTPUT);
   pinMode(pinThermistor, INPUT);
+  digitalWrite(pinHeater, 0);
 
   Serial.begin(57600);
   Serial.setTimeout(250); // Set timeout to 250ms
@@ -94,76 +103,54 @@ void loop() {
   String str = Serial.readStringUntil('\n');
   const char *cmd = str.c_str();
   if(strncmp(cmd, "AT+ SetTemp", 11) == 0 && strlen(cmd) > 13) {
-    if(thermCalibrated) {
-      const char *target = cmd + 12;
-      targetTemp = atof(target);
+    const char *target = cmd + 12;
+    targetTemp = (float)atoi(target) / 100.0f;
   
-      // Don't allow 100C to be exceeded.
-      if(targetTemp > 100.0f) targetTemp = 100.0f;
+    // Don't allow 100C to be exceeded.
+    if(targetTemp > 100.0f) targetTemp = 100.0f;
   
-      // PID SetMode method ignores if we go from automatic
-      // to automatic
-      pid.SetMode(AUTOMATIC);
+    // Convert to Kelvin
+    targetTemp += 273.15;
+
+    // PID SetMode method ignores if we go from automatic
+    // to automatic
+    pid.SetMode(AUTOMATIC);
       
-      Serial.print("AT- SetTempOk\r\n");
-    } else {
-      Serial.print("AT- SetTempErr NotCalibrated\r\n");
-    }
-  } else if(strncmp(cmd, "AT+ SetCalYInt", 14) == 0 && strlen(cmd) > 15) {
-    thermYInt = atof(cmd + 15);
-    unsigned char *b = (unsigned char*)&thermYInt;
-    for(int i = 0; i < 4; i++)
-      EEPROM.write(thermYIntAddr+i, b[i]);
-    EEPROM.write(thermYIntSetAddr, 0x0);
-    if(EEPROM.read(thermStepSetAddr) == 0) 
-      thermCalibrated = true;
-    char buf[64];
-    snprintf(buf, 64, "AT- SetCalYInt %.2f\r\n", thermYInt);
-    Serial.print(buf);
-  } else if(strncmp(cmd, "AT+ GetCalYInt", 14) == 0) {
-    char buf[64];
-    snprintf(buf, 64, "AT- CalYInt %.2f\r\n", thermYInt);
-    Serial.print(buf);
-  } else if(strncmp(cmd, "AT+ SetCalSlope", 10) == 0 && strlen(cmd) > 11) {
-    thermStep = atof(cmd + 11);
-    unsigned char *b = (unsigned char*)&thermStep;
-    for(int i = 0; i < 4; i++)
-      EEPROM.write(thermStepAddr+i, b[i]);
-    EEPROM.write(thermStepSetAddr, 0x0);
-    if(EEPROM.read(thermYIntSetAddr) == 0)
-      thermCalibrated = true;
-    char buf[64];
-    snprintf(buf, 64, "AT- SetCalSlope %.2f\r\n", thermStep);
-    Serial.print(buf);
-  } else if(strncmp(cmd, "AT+ GetCalSlope", 10) == 0) {
-    char buf[64];
-    snprintf(buf, 64, "AT- CalSlope %.2f\r\n", thermStep);
-    Serial.print(buf);
+    Serial.print("AT- SetTempOk\r\n");
   } else if(strncmp(cmd, "AT+ GetActualTemp", 17) == 0) {
     char buf[64];
-    snprintf(buf, 64, "AT- ActualTemp %.2f\r\n", actualTemp);
+    snprintf(buf, 64, "AT- ActualTemp %u\r\n", (unsigned int)((actualTemp-273.15) * 100));
     Serial.print(buf);
   } else if(strncmp(cmd, "AT+ GetTargetTemp", 17) == 0) {
     char buf[64];
-    snprintf(buf, 64, "AT- TargetTemp %.2f\r\n", targetTemp);
+    snprintf(buf, 64, "AT- TargetTemp %u\r\n", (unsigned int)((targetTemp-273.15) * 100));
     Serial.print(buf);
   } else if(strncmp(cmd, "AT+ TurnOff", 11) == 0) {
     pid.SetMode(MANUAL);
     pulseWidth = 0;
     Serial.print("AT- TurnOffOk\r\n");
+  } else if(str.length() > 0) {
+    Serial.print("AT- UnknownCmd\r\n");
   }
 
   // Get actual temp from thermistor
   // Using Steinhart-Hart. Based on
   // http://playground.arduino.cc/ComponentLib/Thermistor2
-  float v1 = (float)analogRead(pinThermistor) / 1024.0f * supplyVoltage;
+  int pinValue = analogRead(pinThermistor);
+  //float v1 = (float)pinValue / 1024.0f * supplyVoltage;
   // Simple voltage divider.
   // v1 = supplyVoltage * Rt / (balanceResistor + Rt)
   // Solve for Rt.
-  float rVal = balanceResistor * v1 / (supplyVoltage - v1);
+  float rVal = balanceResistor * (1023.0f/pinValue-1);
   float lnR = log(rVal);
   float tinv = tA + tB * lnR + tC * lnR * lnR * lnR;
   actualTemp = 1.0f / tinv;
+
+  if(fabs(actualTemp - targetTemp) > 5) {
+    pid.SetTunings(kPfar, kIfar, kDfar);
+  } else {
+    pid.SetTunings(kPnear, kInear, kDnear);
+  }
 
   pid.Compute();
   

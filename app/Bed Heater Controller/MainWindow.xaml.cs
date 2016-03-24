@@ -27,8 +27,11 @@ namespace Bed_Heater_Controller
 
         String SettingsFile;
         Settings Settings;
+        object comPortLock = new object();
         SerialPort comPort;
         Thread ReadThread;
+
+        Thread QueryTempThread;
 
         public MainWindow()
         {
@@ -82,20 +85,30 @@ namespace Bed_Heater_Controller
         bool Connected = false;
         public void OnConnect(object sender, EventArgs ea)
         {
-            if(Connected)
+            
+            if (Connected)
             {
-                try {
-                    comPort.Close();
-                    comPort = null;
-                    Connected = false;
-                    UpdateState();
+                try
+                {
+                    lock (comPortLock)
+                    {
+                        comPort.Close();
+                        Connected = false;
+                        UpdateState();
+                    }
                     ReadThread.Join();
                     ReadThread = null;
-                } catch(IOException e)
+                    QueryTempThread.Join();
+                    QueryTempThread = null;
+
+                    comPort = null;
+                }
+                catch (IOException e)
                 {
 
                 }
-            } else
+            }
+            else
             {
                 try
                 {
@@ -103,25 +116,35 @@ namespace Bed_Heater_Controller
                     if (selected == null)
                         throw new Exception("No com port selected");
 
-                    comPort = new SerialPort(selected, 57600);
-                    comPort.Open();
-                    comPort.NewLine = "\r\n";
+                    lock(comPortLock)
+                    {
+                        comPort = new SerialPort(selected, 57600);
+                        comPort.Open();
+                        comPort.NewLine = "\r\n";
+                        comPort.ReadTimeout = 500;
+                        comPort.WriteTimeout = 500;
 
-                    Connected = true;
-                    UpdateState();
+                        Connected = true;
+                        UpdateState();
+                    }
 
                     // Store com port selection on successful connect
                     Settings.Save(SettingsFile);
 
                     ReadThread = new Thread(new ThreadStart(RunReadThread));
                     ReadThread.Start();
-                } catch(IOException e)
+
+                    QueryTempThread = new Thread(new ThreadStart(RunQueryTempThread));
+                    QueryTempThread.Start();
+                }
+                catch (IOException e)
                 {
                     if (comPort != null && comPort.IsOpen)
                         comPort.Close();
                     comPort = null;
                     MessageBox.Show(e.Message);
-                } catch(Exception e)
+                }
+                catch (Exception e)
                 {
                     MessageBox.Show(e.Message);
                 }
@@ -147,48 +170,62 @@ namespace Bed_Heater_Controller
 
         public void OnSend(object sender, EventArgs ea)
         {
-            if(Connected)
+            lock(comPortLock)
             {
-                String cmd = $"AT+ SetTemp {newTempBox.Text}";
-                comPort.WriteLine(cmd);
+                if (Connected)
+                {
+                    double temp = Double.Parse(newTempBox.Text) * 100.0f;
+                    String cmd = $"AT+ SetTemp {temp}";
+                    comPort.WriteLine(cmd);
+                }
             }
         }
 
         public void OnTurnOff(object sender, EventArgs ea)
         {
-            if(Connected)
+            lock(comPortLock)
             {
-                String cmd = "AT+ TurnOff";
-                comPort.WriteLine(cmd);
+                if (Connected)
+                {
+                    String cmd = "AT+ TurnOff";
+                    comPort.WriteLine(cmd);
+                }
             }
         }
 
         public void OnMessage(String msg)
         {
+            System.Diagnostics.Debug.WriteLine(msg);
             char[] separators = { ' ' };
             string[] words = msg.Split(separators);
             if (words.Length != 3)
                 return;
 
+            try {
+                Dispatcher.Invoke((Action)delegate ()
+                {
+                    if (msg.Contains("AT- SetTempErr"))
+                    {
+                        MessageBox.Show($"Temp set error: {words[2]}");
+                    }
+                    else if (msg.Contains("AT- ActualTemp"))
+                    {
+                        double temp = Double.Parse(words[2]) / 100.0;
+                        currentTempLabel.Content = $"{temp}";
+                    }
+                    else if (msg.Contains("AT- TargetTemp"))
+                    {
+                        double temp = Double.Parse(words[2]) / 100.0;
+                        targetTempLabel.Content = $"{temp}";
+                    }
+                    else
+                    {
+                        MessageBox.Show($"Unknown message: {msg}");
+                    }
+                });
+            } catch(TaskCanceledException)
+            {
 
-            if (msg.Contains("AT- SetTempErr"))
-            {
-                Dispatcher.Invoke((Action)delegate () {
-                    MessageBox.Show($"Temp set error: {words[2]}");
-                });
-            } else if(msg.Contains("AT- ActualTemp"))
-            {
-                double temp = Double.Parse(words[2]);
-                currentTempLabel.Content = $"{temp}";
-            } else if(msg.Contains("AT- TargetTemp"))
-            {
-                double temp = Double.Parse(words[2]);
-                targetTempLabel.Content = $"{temp}";
-            } else
-            {
-                Dispatcher.Invoke((Action)delegate () {
-                    MessageBox.Show($"Unknown message: {msg}");
-                });
             }
         }
 
@@ -197,10 +234,36 @@ namespace Bed_Heater_Controller
             try {
                 while (Connected)
                 {
+                    // Don't lock here, only one thread reading.
                     String line = comPort.ReadLine();
                     OnMessage(line);
                 }
-            } catch(IOException ex)
+            } catch(Exception ex)
+            {
+
+            }
+        }
+
+        public void RunQueryTempThread()
+        {
+            try
+            {
+                
+                while (Connected)
+                {
+                    lock (comPortLock)
+                    {
+                        String msg = "AT+ GetActualTemp";
+                        comPort.WriteLine(msg);
+
+
+                        msg = "AT+ GetTargetTemp";
+                        comPort.WriteLine(msg);
+
+                        Thread.Sleep(250);
+                    }
+                }
+            } catch(Exception e)
             {
 
             }
